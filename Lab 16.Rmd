@@ -1,0 +1,398 @@
+---
+title: "Lab 16- Visualizing NEON Data"
+author: "Joy Tumusiime"
+date: "2024-05-01"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+---
+
+# Motivating Factors
+The motivating factors for this experiment was to analyze the diversity of taxonomic groups at the Guanica Forest site. Knowing the diversity of taxonomic groups can allow researchers to understand what species can grow in certain areas around the world depending on the geography of the area. Additionally, analyzing the sites in which Dormibacterota was found allows researchers to understand where this certain type of species prefers to live in or thrives in. 
+
+# Introduction
+The Guanica Dry Forest Reserve (GUAN) is a terrestrial NEON field site located in a subtropical dry zone along the southern coast of Puerto Rico. Plant species along the reserve include cacti, grasses, and shrubs and the forest has of areas with semi-evergreen, deciduous and scrub trees. Site has a warm climate with low annual rainfall averaging 840 mm (33 in.) and an average annual temperature of 23°C (73°F). [@noauthor_guanica_nodate]
+https://www.neonscience.org/field-sites/guan
+
+![Guanica Dry Forest Reserve](images/Guanica Forest.jpg)
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("treeio")
+BiocManager::install("ggtreeExtra")
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(ggtree)
+library(TDbook) #A Companion Package for the Book "Data Integration, Manipulation and Visualization of Phylogenetic Trees" by Guangchuang Yu (2022, ISBN:9781032233574).
+library(ggimage)
+library(rphylopic)
+library(treeio)
+library(tidytree)
+library(ape)
+library(TreeTools)
+library(phytools)
+library(ggnewscale)
+library(ggtreeExtra)
+library(ggstar)
+library(DT)
+```
+
+```{r}
+NEON_MAGs <- read_csv("data/NEON/GOLD_Study_ID_Gs0161344_NEON_edArchaea.csv") %>% 
+  # remove columns that are not needed for data analysis
+  select(-c(`GOLD Study ID`, `Bin Methods`, `Created By`, `Date Added`)) %>% 
+  # create a new column with the Assembly Type
+  mutate("Assembly Type" = case_when(`Genome Name` == "NEON combined assembly" ~ `Genome Name`,
+                            TRUE ~ "Individual")) %>% 
+  mutate_at("Assembly Type", str_replace, "NEON combined assembly", "Combined") %>% 
+  separate(`GTDB-Tk Taxonomy Lineage`, c("Domain", "Phylum", "Class", "Order", "Family", "Genus"), "; ", remove = FALSE) %>% 
+  # Get rid of the the common string "Soil microbial communities from "
+  mutate_at("Genome Name", str_replace, "Terrestrial soil microbial communities from ", "") %>% 
+  # Use the first `-` to split the column in two
+  separate(`Genome Name`, c("Site","Sample Name"), " - ") %>% 
+  # Get rid of the the common string "S-comp-1"
+  mutate_at("Sample Name", str_replace, "-comp-1", "") %>%
+  # separate the Sample Name into Site ID and plot info
+  separate(`Sample Name`, c("Site ID","subplot.layer.date"), "_", remove = FALSE,) %>% 
+  # separate the plot info into 3 columns
+  separate(`subplot.layer.date`, c("Subplot", "Layer", "Date"), "-") 
+```
+
+
+
+```{r}
+NEON_MAGs <- read_csv("data/NEON/GOLD_Study_ID_Gs0161344_NEON_2024_4_21.csv") %>% 
+  # remove columns that are not needed for data analysis
+  select(-c(`GOLD Study ID`, `Bin Methods`, `Created By`, `Date Added`, `Bin Lineage`)) %>% 
+  # create a new column with the Assembly Type
+  mutate("Assembly Type" = case_when(`Genome Name` == "NEON combined assembly" ~ `Genome Name`,
+                            TRUE ~ "Individual")) %>% 
+  mutate_at("Assembly Type", str_replace, "NEON combined assembly", "Combined") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "d__", "") %>%  
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "p__", "") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "c__", "") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "o__", "") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "f__", "") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "g__", "") %>% 
+  mutate_at("GTDB-Tk Taxonomy Lineage", str_replace, "s__", "") %>%
+  separate(`GTDB-Tk Taxonomy Lineage`, c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"), ";", remove = FALSE) %>% 
+  mutate_at("Domain", na_if,"") %>% 
+  mutate_at("Phylum", na_if,"") %>% 
+  mutate_at("Class", na_if,"") %>% 
+  mutate_at("Order", na_if,"") %>% 
+  mutate_at("Family", na_if,"") %>% 
+  mutate_at("Genus", na_if,"") %>% 
+  mutate_at("Species", na_if,"") %>% 
+  
+  # Get rid of the the common string "Soil microbial communities from "
+  mutate_at("Genome Name", str_replace, "Terrestrial soil microbial communities from ", "") %>% 
+  # Use the first `-` to split the column in two
+  separate(`Genome Name`, c("Site","Sample Name"), " - ") %>% 
+  # Get rid of the the common string "S-comp-1"
+  mutate_at("Sample Name", str_replace, "-comp-1", "") %>%
+  # separate the Sample Name into Site ID and plot info
+  separate(`Sample Name`, c("Site ID","subplot.layer.date"), "_", remove = FALSE,) %>% 
+  # separate the plot info into 3 columns
+  separate(`subplot.layer.date`, c("Subplot", "Layer", "Date"), "-") 
+```
+```{r}
+NEON_metagenomes <- read_tsv("data/NEON/exported_img_data_Gs0161344_NEON.tsv") %>% 
+  select(-c(`Domain`, `Sequencing Status`, `Sequencing Center`)) %>% 
+  rename(`Genome Name` = `Genome Name / Sample Name`) %>% 
+  filter(str_detect(`Genome Name`, 're-annotation', negate = T)) %>% 
+  filter(str_detect(`Genome Name`, 'WREF plot', negate = T)) 
+```
+
+```{r}
+NEON_metagenomes <- NEON_metagenomes %>% 
+  # Get rid of the the common string "Soil microbial communities from "
+  mutate_at("Genome Name", str_replace, "Terrestrial soil microbial communities from ", "") %>% 
+  # Use the first `-` to split the column in two
+  separate(`Genome Name`, c("Site","Sample Name"), " - ") %>% 
+  # Get rid of the the common string "-comp-1"
+  mutate_at("Sample Name", str_replace, "-comp-1", "") %>%
+  # separate the Sample Name into Site ID and plot info
+  separate(`Sample Name`, c("Site ID","subplot.layer.date"), "_", remove = FALSE,) %>% 
+  # separate the plot info into 3 columns
+  separate(`subplot.layer.date`, c("Subplot", "Layer", "Date"), "-") 
+```
+
+```{r}
+NEON_chemistry <- read_tsv("data/NEON/neon_plot_soilChem1_metadata.tsv") %>% 
+  # remove -COMP from genomicsSampleID
+  mutate_at("genomicsSampleID", str_replace, "-COMP", "") 
+```
+
+```{r}
+NEON_MAGs_metagenomes_chemistry <- NEON_MAGs %>% 
+  left_join(NEON_metagenomes, by = "Sample Name") %>% 
+  left_join(NEON_chemistry, by = c("Sample Name" = "genomicsSampleID")) %>% 
+  rename("label" = "Bin ID")
+```
+
+```{r}
+tree_arc <- read.tree("data/NEON/gtdbtk.ar53.decorated.tree")
+tree_bac <- read.tree("data/NEON/gtdbtk.bac120.decorated.tree")
+```
+
+```{r}
+# Make a vector with the internal node labels
+node_vector_bac = c(tree_bac$tip.label,tree_bac$node.label)
+
+# Search for your Phylum or Class to get the node
+grep("Dormibacterota", node_vector_bac, value = TRUE)
+```
+```{r}
+match(grep("Dormibacterota", node_vector_bac, value = TRUE), node_vector_bac)
+```
+
+```{r}
+# First need to preorder tree before extracting. N
+tree_bac_preorder <- Preorder(tree_bac)
+tree_Dormibacterota <- Subtree(tree_bac_preorder, 1767)
+```
+
+```{r}
+NEON_MAGs_Dormibacterota <- NEON_MAGs_metagenomes_chemistry %>% 
+  filter(Phylum == "Dormibacterota") 
+```
+
+# Results
+```{r}
+ggtree(tree_Dormibacterota) +
+  geom_tiplab(size=3) +
+  xlim(0,20)
+```
+## Basic Circular
+```{r}
+ggtree(tree_Dormibacterota, layout="circular") + 
+  geom_tiplab(aes(angle=angle))+
+    theme_tree() +
+    xlim(0,18)
+```
+
+```{r}
+ggtree(tree_bac, layout="circular") +
+    geom_hilight(node=1767, fill="steelblue", alpha=10) 
+```
+```{r}
+ggtree(tree_bac, layout="circular", branch.length="none") +
+    geom_hilight(node=1767, fill="deeppink1", alpha=.8) +
+    geom_cladelab(node=1767, label="Dormibacterota", align=TRUE,  
+                  offset = 0, textcolor='deeppink1', barcolor='deeppink1')
+```
+```{r}
+ggtree(tree_bac, layout="circular", branch.length="none") %>% 
+  collapse(node=1767) + 
+  geom_point2(aes(subset=(node==55)), shape=23, size=5, fill='deeppink1') +
+  geom_cladelab(node=55, label="Dormibacterota", align=TRUE,  
+                  offset = 2, textcolor='deeppink1')
+```
+
+```{r}
+p <- ggtree(tree_bac, layout="circular", branch.length="none")
+scaleClade(p, 1767, .8) %>% collapse(1767, 'min', fill="deeppink1")  +
+  geom_cladelab(node=1767, label="Dormibacterota", align=TRUE,  
+                  offset = 0.8, textcolor='deeppink1')
+```
+```{r}
+ggtree(tree_Dormibacterota, layout="circular")  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_tiplab(size=2, hjust=-.1) +
+  xlim(0,20) +
+  geom_point(mapping=aes(color=Class)) 
+```
+
+```{r}
+ggtree(tree_Dormibacterota, layout="circular")  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_tiplab(size=2, hjust=-.1) +
+  xlim(0,20) +
+  geom_point(mapping=aes(color=Class, shape = `Assembly Type`)) 
+```
+
+```{r}
+ggtree(tree_Dormibacterota)  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_tiplab(size=2, hjust=-.1) +
+  xlim(0,20) +
+  geom_point(mapping=aes(color=`Ecosystem Subtype`)) 
+```
+
+```{r}
+ggtree(tree_Dormibacterota)  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_tippoint(aes(colour=`Bin Completeness`)) + 
+  scale_colour_gradient(low='blue', high='red') +
+  geom_tiplab(size=2, hjust=-.1) +
+  xlim(0,15) 
+```
+```{r}
+ggtree(tree_Dormibacterota, layout="circular")  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_point2(mapping=aes(color=`Ecosystem Subtype`, size=`Total Number of Bases`))
+```
+```{r}
+# For unknown reasons the following does not like blank spaces in the names
+NEON_MAGs_metagenomes_chemistry_noblank <- NEON_MAGs_metagenomes_chemistry %>% 
+  rename("AssemblyType" = "Assembly Type") %>% 
+  rename("BinCompleteness" = "Bin Completeness") %>% 
+  rename("BinContamination" = "Bin Contamination") %>% 
+  rename("TotalNumberofBases" = "Total Number of Bases") %>% 
+  rename("EcosystemSubtype" = "Ecosystem Subtype")
+
+ggtree(tree_Dormibacterota)  %<+%
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_tippoint(aes(colour=`Ecosystem Subtype`)) + 
+
+# For unknown reasons the following does not like blank spaces in the names
+  geom_facet(panel = "Bin Completeness", data = NEON_MAGs_metagenomes_chemistry_noblank, geom = geom_point, 
+      mapping=aes(x = BinCompleteness)) +
+  geom_facet(panel = "Bin Contamination", data = NEON_MAGs_metagenomes_chemistry_noblank, geom = geom_col, 
+                aes(x = BinContamination), orientation = 'y', width = .6) +
+  theme_tree2(legend.position=c(.1, .7))
+```
+
+```{r}
+ggtree(tree_Dormibacterota, layout="circular", branch.length="none") %<+% 
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_point2(mapping=aes(color=`Ecosystem Subtype`, size=`Total Number of Bases`)) + 
+  new_scale_fill() + 
+  geom_fruit(
+      data=NEON_MAGs_metagenomes_chemistry_noblank,
+      geom=geom_tile,
+      mapping=aes(y=label, x=1, fill= AssemblyType),
+      offset=0.08,   # The distance between external layers, default is 0.03 times of x range of tree.
+      pwidth=0.25 # width of the external layer, default is 0.2 times of x range of tree.
+      ) 
+
+```
+```{r}
+ggtree(tree_Dormibacterota, layout="circular", branch.length="none") %<+% 
+  NEON_MAGs_metagenomes_chemistry + 
+  geom_point2(mapping=aes(color=`Ecosystem Subtype`, size=`Total Number of Bases`)) + 
+  new_scale_fill() + 
+  geom_fruit(
+      data=NEON_MAGs_metagenomes_chemistry_noblank,
+      geom=geom_tile,
+      mapping=aes(y=label, x=1, fill= AssemblyType),
+      offset=0.08,   # The distance between external layers, default is 0.03 times of x range of tree.
+      pwidth=0.25 # width of the external layer, default is 0.2 times of x range of tree.
+      ) + 
+  new_scale_fill() +
+  geom_fruit(
+          data=NEON_MAGs_metagenomes_chemistry_noblank,
+          geom=geom_col,
+          mapping=aes(y=label, x=TotalNumberofBases),  
+          pwidth=0.4,
+          axis.params=list(
+                          axis="x", # add axis text of the layer.
+                          text.angle=-45, # the text size of axis.
+                          hjust=0  # adjust the horizontal position of text of axis.
+                      ),
+          grid.params=list() # add the grid line of the external bar plot.
+      ) + 
+      theme(#legend.position=c(0.96, 0.5), # the position of legend.
+          legend.background=element_rect(fill=NA), # the background of legend.
+          legend.title=element_text(size=7), # the title size of legend.
+          legend.text=element_text(size=6), # the text size of legend.
+          legend.spacing.y = unit(0.02, "cm")  # the distance of legends (y orientation).
+      ) 
+```
+### Making a tree of your site
+```{r}
+NEON_MAGs_metagenomes_chemistry_GUAN <- NEON_MAGs_metagenomes_chemistry %>% 
+  filter(`Site ID.x` == "GUAN")
+```
+
+```{r}
+NEON_MAGs_metagenomes_chemistry_GUAN <- NEON_MAGs_metagenomes_chemistry %>% 
+  filter(`Site ID.x` == "GUAN") %>% 
+  filter(Domain == "Archea")
+```
+```{r}
+GUAN_MAGs_label <- NEON_MAGs_metagenomes_chemistry_GUAN$label
+```
+
+```{r}
+tree_arc_GUAN_MAGs <-drop.tip(tree_arc,tree_arc$tip.label[-match(GUAN_MAGs_label, tree_arc$tip.label)])
+```
+
+```{r}
+ggtree(tree_arc_GUAN_MAGs, layout="circular")  %<+%
+  NEON_MAGs_metagenomes_chemistry +
+  geom_point(mapping=aes(color=Phylum)) 
+```
+
+```{r}
+datatable(
+NEON_MAGs %>% 
+  filter(str_detect(`Site`, 'Guanica State Forest and Biosphere Reserve, Puerto Rico'))
+)
+```
+
+```{r}
+datatable(
+NEON_MAGs %>% 
+  filter(str_detect(`GTDB-Tk Taxonomy Lineage`, 'Dormibacterota'))
+)
+```
+
+
+# Discussion
+Guanica State Forest was found to have six main phylum with Actinobacteriota being the most prevalent with 30 counts. There have found to be an additional 30 counts of novel bacteria at this site. The total MAGs for Actinobacteriota found at GUAN were between 20 and 40. There was found to be a negative correlation between the soil temperature and elevation at GUAN where the soil temperature was highest at the lowest elevation and lowest at the highest elevation. This correlates to the type of soil found at GUAN which are known to be dry and desert-like.The levels of pH in the soil in relation to elevation were inconsistent. Dormibacterota was found in six ecosubtypes mostly in wetlands and shrublands. Dormibacterota has a gene count of about 5000 which is aroun average compared to other phylum. Dormibacterota is also found mostly at National Grasslands LJB in Texas, USA. Dormibacterota is found in Grasslands where soil temperature is around 15-20C.
+
+
+# References
+@article{montgomery_persistence_2021,
+	title = {Persistence and resistance: survival mechanisms of {Candidatus} {Dormibacterota} from nutrient-poor {Antarctic} soils},
+	volume = {23},
+	issn = {1462-2920},
+	shorttitle = {Persistence and resistance},
+	doi = {10.1111/1462-2920.15610},
+	abstract = {Candidatus Dormibacterota is an uncultured bacterial phylum found predominantly in soil that is present in high abundances within cold desert soils. Here, we interrogate nine metagenome-assembled genomes (MAGs), including six new MAGs derived from soil metagenomes obtained from two eastern Antarctic sites. Phylogenomic and taxonomic analyses revealed these MAGs represent four genera and five species, representing two order-level clades within Ca. Dormibacterota. Metabolic reconstructions of these MAGs revealed the potential for aerobic metabolism, and versatile adaptations enabling persistence in the 'extreme' Antarctic environment. Primary amongst these adaptations were abilities to scavenge atmospheric H2 and CO as energy sources, as well as using the energy derived from H2 oxidation to fix atmospheric CO2 via the Calvin-Bassham-Benson cycle, using a RuBisCO type IE. We propose that these allow Ca. Dormibacterota to persist using H2 oxidation and grow using atmospheric chemosynthesis in terrestrial Antarctica. Fluorescence in situ hybridization revealed Ca. Dormibacterota to be coccoid cells, 0.3-1.4 μm in diameter, with some cells exhibiting the potential for a symbiotic or syntrophic lifestyle.},
+	language = {eng},
+	number = {8},
+	journal = {Environmental Microbiology},
+	author = {Montgomery, Kate and Williams, Timothy J. and Brettle, Merryn and Berengut, Jonathan F. and Ray, Angelique E. and Zhang, Eden and Zaugg, Julian and Hugenholtz, Philip and Ferrari, Belinda C.},
+	month = aug,
+	year = {2021},
+	pmid = {34029441},
+	keywords = {Antarctic Regions, In Situ Hybridization, Fluorescence, Metagenome, Nutrients, Phylogeny, Soil},
+	pages = {4276--4294},
+}
+
+@misc{noauthor_guanica_nodate,
+	title = {Guanica {Forest} {NEON} {\textbar} {NSF} {NEON} {\textbar} {Open} {Data} to {Understand} our {Ecosystems}},
+	url = {https://www.neonscience.org/field-sites/guan},
+	urldate = {2024-04-10},
+}
+
+@misc{noauthor_guanica_2023,
+	title = {Guánica {State} {Forest}},
+	copyright = {Creative Commons Attribution-ShareAlike License},
+	url = {https://en.wikipedia.org/w/index.php?title=Gu%C3%A1nica_State_Forest&oldid=1191944996},
+	abstract = {The Guánica State Forest (Spanish: Bosque Estatal de Guánica), popularly known as the Guánica Dry Forest (Spanish: Bosque seco de Guánica) is a subtropical dry forest located in southwest Puerto Rico. The area was designated as a forest reserve in 1919 and a United Nations Biosphere Reserve in 1981. It is considered the best preserved subtropical dry forest and the best example of dry forest in the Caribbean.With approximately 10,000 acres, it is the largest of the 20 state forests of Puerto Rico, and it extends over 5 municipalities: Guánica, Guayanilla, Peñuelas, Ponce, and Yauco (although the forest units located in the municipalities of Peñuelas and Ponce only consist of keys and small islands).},
+	language = {en},
+	urldate = {2024-04-10},
+	journal = {Wikipedia},
+	month = dec,
+	year = {2023},
+	note = {Page Version ID: 1191944996},
+}
+
+
+
+
